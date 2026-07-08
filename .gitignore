@@ -1,0 +1,9 @@
+# OS / editor cruft
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Local archives & staging copies (kept on the Desktop, not part of the site)
+*.zip
+*.zip.txt
+_gle_form_inspect.pdf

@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Genius Premium Tuition — TLC Slip Hand-in</title>
+  <meta name="description" content="Submit your monthly TLC slips: upload your scanned PDF, fill in your details, sign, and download one combined hand-in PDF. Everything runs in your browser — nothing is uploaded." />
+
+  <!-- House font (matches the Schedule Maker / Syndicate Attendance apps) -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Montserrat:ital,wght@0,300;0,400;0,500;0,600;0,700;0,800;1,600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css" />
+
+  <!-- Libraries via CDN (no build step). Loaded before app.js. -->
+  <script src="https://unpkg.com/pdf-lib@1.17.1/dist/pdf-lib.min.js" defer></script>
+  <script src="https://cdn.jsdelivr.net/npm/signature_pad@4.1.7/dist/signature_pad.umd.min.js" defer></script>
+  <script src="app.js" defer></script>
+</head>
+<body class="intro-running">
+
+  <!-- ============================== -->
+  <!-- ===== WELCOME / LOADING ====== -->
+  <!-- ============================== -->
+  <div id="welcome-overlay" aria-hidden="true">
+    <div id="welcome-greeting" class="welcome-stage">Welcome</div>
+    <div id="welcome-logo" class="welcome-stage">
+      <div class="brand-big">GENIUS<span class="dot">.</span></div>
+      <div class="brand-sub">PREMIUM TUITION</div>
+      <div class="brand-tagline">TLC Slip Hand-in</div>
+    </div>
+    <div class="welcome-credits">developed by zak.k</div>
+  </div>
+
+  <script>
+    // Intro sequence — runs immediately, mirrors the Schedule Maker timing.
+    (function runIntroSequence() {
+      const overlay  = document.getElementById('welcome-overlay');
+      const greeting = document.getElementById('welcome-greeting');
+      const logo     = document.getElementById('welcome-logo');
+      if (!overlay) return;
+
+      // Respect users who prefer no motion: skip straight to the app.
+      const reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      if (reduce) {
+        overlay.classList.add('is-hidden');
+        document.body.classList.remove('intro-running');
+        setTimeout(() => overlay.remove(), 700);
+        return;
+      }
+
+      //   80ms : "Welcome" fades in
+      //  900ms : greeting fades out
+      // 1300ms : logo (GENIUS. / PREMIUM TUITION / TLC Slip Hand-in) fades in
+      // 2200ms : logo fades out
+      // 2500ms : overlay fades out
+      // 3300ms : overlay removed
+      setTimeout(() => greeting.classList.add('is-active'), 80);
+      setTimeout(() => { greeting.classList.remove('is-active'); greeting.classList.add('is-leaving'); }, 900);
+      setTimeout(() => logo.classList.add('is-active'), 1300);
+      setTimeout(() => { logo.classList.remove('is-active'); logo.classList.add('is-leaving'); }, 2200);
+      setTimeout(() => overlay.classList.add('is-hidden'), 2500);
+      setTimeout(() => {
+        if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
+        document.body.classList.remove('intro-running');
+      }, 3300);
+    })();
+  </script>
+
+  <a class="skip-link" href="#main">Skip to form</a>
+
+  <header class="site-header">
+    <div class="brand">
+      <!-- Node-network logo mark (inline SVG, matches GPT booklet brand) -->
+      <svg class="brand-mark" width="42" height="42" viewBox="0 0 100 100" role="img" aria-label="Genius Premium Tuition logo">
+        <g fill="none" stroke-width="5" stroke-linecap="round">
+          <line x1="18" y1="20" x2="42" y2="20" stroke="#F5B82A" />
+          <line x1="42" y1="20" x2="78" y2="32" stroke="#F5B82A" />
+          <line x1="42" y1="20" x2="42" y2="52" stroke="#1FA7E0" />
+          <line x1="42" y1="52" x2="20" y2="70" stroke="#F5B82A" />
+          <line x1="42" y1="52" x2="72" y2="70" stroke="#1FA7E0" />
+          <line x1="20" y1="70" x2="46" y2="84" stroke="#F5B82A" />
+          <line x1="72" y1="70" x2="46" y2="84" stroke="#F5B82A" />
+        </g>
+        <g>
+          <circle cx="18" cy="20" r="7" fill="none" stroke="#F5B82A" stroke-width="4" />
+          <circle cx="78" cy="32" r="7" fill="none" stroke="#F5B82A" stroke-width="4" />
+          <circle cx="42" cy="20" r="5" fill="#1FA7E0" />
+          <circle cx="42" cy="52" r="10" fill="#F5B82A" />
+          <circle cx="20" cy="70" r="6" fill="#1FA7E0" />
+          <circle cx="72" cy="70" r="6" fill="#1FA7E0" />
+          <circle cx="46" cy="84" r="7" fill="none" stroke="#F5B82A" stroke-width="4" />
+        </g>
+      </svg>
+      <div class="brand-text">
+        <span class="brand-name">Genius Premium Tuition</span>
+        <span class="brand-sub">TLC Slip Hand-in</span>
+      </div>
+    </div>
+  </header>
+
+  <main id="main" class="page">
+    <section class="intro">
+      <h1>Submit your monthly TLC slips</h1>
+      <p class="lede">
+        Upload your scanned slips, fill in a few details, sign below, and we'll build one combined
+        PDF — your branded hand-in form first, then your slips. Everything happens in your browser;
+        nothing you enter or upload leaves this device.
+      </p>
+    </section>
+
+    <form id="handin-form" novalidate>
+      <!-- 1 ─ Upload ------------------------------------------------------ -->
+      <fieldset class="card">
+        <legend><span class="step">1</span> Upload your scanned slips</legend>
+        <div id="dropzone" class="dropzone" tabindex="0" role="button"
+             aria-label="Upload a PDF of your scanned slips. Click to browse or drop a file here.">
+          <input id="file-input" class="visually-hidden" type="file"
+                 accept="application/pdf,.pdf,image/jpeg,image/png" />
+          <svg class="dz-icon" width="34" height="34" viewBox="0 0 24 24" aria-hidden="true">
+            <path fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"
+                  stroke-linejoin="round" d="M12 16V4m0 0L7.5 8.5M12 4l4.5 4.5M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3" />
+          </svg>
+          <p class="dz-primary">Drop your PDF here, or <span class="link">click to browse</span></p>
+          <p class="dz-hint">A single PDF of your scanned slips. JPG/PNG scans are also accepted.</p>
+        </div>
+        <p id="file-status" class="file-status" aria-live="polite"></p>
+        <p id="file-error" class="field-error" role="alert"></p>
+      </fieldset>
+
+      <!-- 2 ─ Details ----------------------------------------------------- -->
+      <fieldset class="card">
+        <legend><span class="step">2</span> Your details</legend>
+
+        <div class="grid">
+          <div class="field field-wide">
+            <label for="full-name">Full name <span class="req">*</span></label>
+            <input id="full-name" name="full-name" type="text" autocomplete="name"
+                   required aria-describedby="full-name-err" />
+            <p id="full-name-err" class="field-error" role="alert"></p>
+          </div>
+
+          <div class="field">
+            <label for="pay-month">Pay month <span class="req">*</span></label>
+            <input id="pay-month" name="pay-month" type="month" required aria-describedby="pay-month-err" />
+            <p id="pay-month-err" class="field-error" role="alert"></p>
+          </div>
+
+          <div class="field">
+            <label for="date-issued">Date issued <span class="req">*</span></label>
+            <input id="date-issued" name="date-issued" type="date" required aria-describedby="date-issued-err" />
+            <p id="date-issued-err" class="field-error" role="alert"></p>
+          </div>
+
+          <div class="field">
+            <label for="syndicate-count">Syndicates attended <span class="req">*</span></label>
+            <input id="syndicate-count" name="syndicate-count" type="number" min="0" max="5" step="1"
+                   inputmode="numeric" value="0" required aria-describedby="syndicate-count-hint syndicate-count-err" />
+            <p id="syndicate-count-hint" class="field-hint">0–5. This sets how many dates you enter below.</p>
+            <p id="syndicate-count-err" class="field-error" role="alert"></p>
+          </div>
+        </div>
+
+        <div id="syndicate-dates" class="syndicate-dates" hidden>
+          <p class="subhead">Syndicate dates</p>
+          <div id="syndicate-date-list" class="grid grid-dates"></div>
+          <p id="syndicate-cap-note" class="field-hint" hidden>
+            The form has 5 syndicate slots; list the first 5.
+          </p>
+        </div>
+
+        <!-- Live "as it will appear on the form" preview -->
+        <div class="preview" aria-live="polite">
+          <p class="subhead">On the form, this will read:</p>
+          <ul class="preview-list">
+            <li><span>Pay month</span><strong id="pv-pay-month">—</strong></li>
+            <li><span>Date issued</span><strong id="pv-date-issued">—</strong></li>
+            <li><span>Syndicate dates</span><strong id="pv-syndicate-dates">—</strong></li>
+          </ul>
+        </div>
+      </fieldset>
+
+      <!-- 3 ─ Signature --------------------------------------------------- -->
+      <fieldset class="card">
+        <legend><span class="step">3</span> Sign</legend>
+        <p class="field-hint">Draw your signature in the box. It's placed on the "Signed:" line of the form.</p>
+        <div class="sig-wrap">
+          <canvas id="signature-pad" class="signature-pad" aria-label="Signature drawing area"></canvas>
+          <div class="sig-baseline" aria-hidden="true"></div>
+        </div>
+        <div class="sig-actions">
+          <button type="button" id="sig-undo" class="btn btn-ghost">Undo</button>
+          <button type="button" id="sig-clear" class="btn btn-ghost">Clear</button>
+        </div>
+        <p id="signature-err" class="field-error" role="alert"></p>
+      </fieldset>
+
+      <!-- 4 ─ Generate ---------------------------------------------------- -->
+      <div class="actions">
+        <button type="submit" id="generate" class="btn btn-primary btn-lg">
+          Generate &amp; Download
+        </button>
+        <button type="button" id="download-again" class="btn btn-secondary" hidden>
+          Download again
+        </button>
+      </div>
+
+      <div id="status" class="status" role="status" aria-live="polite" hidden></div>
+      <div id="form-error" class="form-error" role="alert" hidden></div>
+    </form>
+
+    <p class="privacy-note">
+      🔒 100% in-browser. Your PDF and details are never uploaded to any server.
+    </p>
+  </main>
+
+  <footer class="site-footer">
+    <p>Genius Premium Tuition · TLC Slip Hand-in</p>
+  </footer>
+  <div class="app-credits">developed by zak.k</div>
+</body>
+</html>
