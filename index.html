@@ -23,7 +23,7 @@
   <!-- ===== WELCOME / LOADING ====== -->
   <!-- ============================== -->
   <div id="welcome-overlay" aria-hidden="true">
-    <div id="welcome-greeting" class="welcome-stage">Welcome</div>
+    <div id="welcome-greeting" class="welcome-stage">Welcome<span id="welcome-name-suffix"></span></div>
     <div id="welcome-logo" class="welcome-stage">
       <div class="brand-big">GENIUS<span class="dot">.</span></div>
       <div class="brand-sub">PREMIUM TUITION</div>
@@ -33,38 +33,186 @@
   </div>
 
   <script>
-    // Intro sequence — runs immediately, mirrors the Schedule Maker timing.
-    (function runIntroSequence() {
+    // ── Intro + gate coordinator ──────────────────────────────────────────
+    // Runs immediately (not a module, so it doesn't wait on the Firebase
+    // download). It plays the welcome animation and, once BOTH the intro and
+    // the Firebase auth state are known, reveals either the sign-in gate or
+    // the form. The Firebase module (below) talks to it via window.__auth*.
+    (function () {
       const overlay  = document.getElementById('welcome-overlay');
       const greeting = document.getElementById('welcome-greeting');
+      const nameSpan = document.getElementById('welcome-name-suffix');
       const logo     = document.getElementById('welcome-logo');
-      if (!overlay) return;
 
-      // Respect users who prefer no motion: skip straight to the app.
+      let introDone = false;
+      let authKnown = false;
+      let signedIn  = false;
+
+      // Instant greeting from a cached name (shared with the Schedule Maker),
+      // so returning users see "Welcome, [Name]" before Firebase responds.
+      const cachedName = localStorage.getItem('genius_lastFirstName');
+      if (cachedName) {
+        nameSpan.textContent = ', ' + cachedName;
+        nameSpan.classList.add('accent');
+      }
+
+      // Called by the Firebase module when a name is resolved/updated.
+      window.__setWelcomeName = function (firstName) {
+        if (!firstName) return;
+        localStorage.setItem('genius_lastFirstName', firstName);
+        if (greeting && !greeting.classList.contains('is-leaving')) {
+          nameSpan.textContent = ', ' + firstName;
+          nameSpan.classList.add('accent');
+        }
+      };
+
+      function reveal() {
+        if (!introDone) return;               // wait for the animation
+        const gate = document.getElementById('auth-gate');
+        const main = document.getElementById('main');
+        if (overlay && !overlay.classList.contains('is-hidden')) {
+          overlay.classList.add('is-hidden');
+          setTimeout(() => overlay.remove(), 800);
+          document.body.classList.remove('intro-running');
+        }
+        if (signedIn) {
+          if (gate) gate.hidden = true;
+          if (main) main.hidden = false;
+          // The signature canvas was 0×0 while the form was hidden — re-size it
+          // now that it's visible so its exported PNG is valid.
+          setTimeout(() => window.dispatchEvent(new Event('resize')), 50);
+        } else {
+          if (main) main.hidden = true;
+          if (gate) {
+            gate.hidden = false;
+            // Enable the button only once auth state is actually known.
+            const btn = document.getElementById('signin-btn');
+            if (btn) {
+              btn.disabled = !authKnown;
+              btn.querySelector('.signin-label').textContent =
+                authKnown ? 'Sign in with Google' : 'Connecting…';
+            }
+          }
+        }
+      }
+      window.__reveal = reveal;
+
+      // Firebase module reports auth state here.
+      window.__onAuth = function (state) {
+        authKnown = true;
+        signedIn = !!(state && state.signedIn);
+        reveal();
+      };
+
+      // Safety net: if the sign-in service never responds, surface a message.
+      setTimeout(function () {
+        if (!authKnown) {
+          const err = document.getElementById('auth-error');
+          if (err) {
+            err.hidden = false;
+            err.textContent = 'Couldn’t reach the sign-in service. Check your connection and refresh.';
+          }
+          const btn = document.getElementById('signin-btn');
+          if (btn) btn.querySelector('.signin-label').textContent = 'Sign in with Google';
+        }
+      }, 9000);
+
+      // ── Animation timeline (mirrors the Schedule Maker) ──
       const reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-      if (reduce) {
-        overlay.classList.add('is-hidden');
-        document.body.classList.remove('intro-running');
-        setTimeout(() => overlay.remove(), 700);
+      if (reduce) { introDone = true; reveal(); return; }
+
+      setTimeout(() => greeting.classList.add('is-active'), 80);
+      setTimeout(() => { greeting.classList.remove('is-active'); greeting.classList.add('is-leaving'); }, 1100);
+      setTimeout(() => logo.classList.add('is-active'), 1500);
+      setTimeout(() => { logo.classList.remove('is-active'); logo.classList.add('is-leaving'); }, 2400);
+      setTimeout(() => { introDone = true; reveal(); }, 2700);
+    })();
+  </script>
+
+  <!-- Firebase Google sign-in (same project as the Schedule Maker) -->
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+    import { getAuth, onAuthStateChanged, signInWithPopup, GoogleAuthProvider, signOut }
+      from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+
+    // Web API keys are public by design; this app uses Auth only (no data).
+    const firebaseConfig = {
+      apiKey: "AIzaSyBvFSgHf04mEm8fBsfkc0umWv0J_UjB7j4",
+      authDomain: "schedulemaker-c212c.firebaseapp.com",
+      projectId: "schedulemaker-c212c",
+      storageBucket: "schedulemaker-c212c.firebasestorage.app",
+      messagingSenderId: "91220803760",
+      appId: "1:91220803760:web:f0ddb2a415a2f7394b3b75"
+    };
+    const auth = getAuth(initializeApp(firebaseConfig));
+
+    // ── Optional: restrict sign-in to one email domain ────────────────────
+    // Leave '' to allow any Google account. Set to 'geniuspremium.com' to only
+    // let Genius accounts in (others are signed straight back out with a note).
+    const ALLOWED_DOMAIN = '';
+
+    // Friendly first name from the Google display name / email.
+    function deriveFirstName(user) {
+      if (!user) return null;
+      if (user.displayName) {
+        const first = user.displayName.trim().split(/\s+/)[0];
+        if (first) return first;
+      }
+      if (user.email) {
+        const cleaned = user.email.split('@')[0].replace(/[._\-]+/g, ' ').replace(/\d+$/, '').trim();
+        const first = cleaned.split(/\s+/)[0];
+        if (first) return first.charAt(0).toUpperCase() + first.slice(1).toLowerCase();
+      }
+      return null;
+    }
+
+    // Exposed to the sign-in / logout buttons.
+    window.__signIn = function () {
+      const err = document.getElementById('auth-error');
+      if (err) err.hidden = true;
+      signInWithPopup(auth, new GoogleAuthProvider()).catch((e) => {
+        console.error(e);
+        if (err) {
+          err.hidden = false;
+          err.textContent = e && e.code === 'auth/unauthorized-domain'
+            ? 'This site isn’t authorised for sign-in yet. (Add its domain in Firebase → Authentication → Settings → Authorized domains.)'
+            : 'Sign-in was cancelled or failed. Please try again.';
+        }
+      });
+    };
+    window.__signOut = function () { signOut(auth).then(() => window.location.reload()); };
+
+    onAuthStateChanged(auth, (user) => {
+      // Enforce the optional domain restriction.
+      if (user && ALLOWED_DOMAIN &&
+          !(user.email || '').toLowerCase().endsWith('@' + ALLOWED_DOMAIN)) {
+        const err = document.getElementById('auth-error');
+        if (err) { err.hidden = false; err.textContent = 'Please sign in with your @' + ALLOWED_DOMAIN + ' account.'; }
+        signOut(auth);                 // re-fires this handler with null
+        if (window.__onAuth) window.__onAuth({ signedIn: false });
         return;
       }
 
-      //   80ms : "Welcome" fades in
-      //  900ms : greeting fades out
-      // 1300ms : logo (GENIUS. / PREMIUM TUITION / TLC Slip Hand-in) fades in
-      // 2200ms : logo fades out
-      // 2500ms : overlay fades out
-      // 3300ms : overlay removed
-      setTimeout(() => greeting.classList.add('is-active'), 80);
-      setTimeout(() => { greeting.classList.remove('is-active'); greeting.classList.add('is-leaving'); }, 900);
-      setTimeout(() => logo.classList.add('is-active'), 1300);
-      setTimeout(() => { logo.classList.remove('is-active'); logo.classList.add('is-leaving'); }, 2200);
-      setTimeout(() => overlay.classList.add('is-hidden'), 2500);
-      setTimeout(() => {
-        if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
-        document.body.classList.remove('intro-running');
-      }, 3300);
-    })();
+      const signedIn = !!user;
+
+      // Update the welcome greeting + cache the name.
+      const firstName = deriveFirstName(user);
+      if (firstName && window.__setWelcomeName) window.__setWelcomeName(firstName);
+
+      // Header status + pre-fill the form's Full name.
+      const area = document.getElementById('user-area');
+      const emailEl = document.getElementById('user-email');
+      if (signedIn) {
+        if (area) area.hidden = false;
+        if (emailEl) emailEl.textContent = user.email || '';
+        const nameInput = document.getElementById('full-name');
+        if (nameInput && !nameInput.value && user.displayName) nameInput.value = user.displayName;
+      } else if (area) {
+        area.hidden = true;
+      }
+
+      if (window.__onAuth) window.__onAuth({ signedIn });
+    });
   </script>
 
   <a class="skip-link" href="#main">Skip to form</a>
@@ -96,10 +244,36 @@
         <span class="brand-name">Genius Premium Tuition</span>
         <span class="brand-sub">TLC Slip Hand-in</span>
       </div>
+      <div class="user-area" id="user-area" hidden>
+        <span id="user-email" class="user-email"></span>
+        <button type="button" id="logout-btn" class="btn btn-ghost btn-sm" onclick="window.__signOut && window.__signOut()">Log out</button>
+      </div>
     </div>
   </header>
 
-  <main id="main" class="page">
+  <!-- ============================== -->
+  <!-- ===== SIGN-IN GATE =========== -->
+  <!-- ============================== -->
+  <section id="auth-gate" class="auth-gate" hidden aria-label="Sign in">
+    <div class="auth-card">
+      <div class="brand-big-sm">GENIUS<span class="dot">.</span></div>
+      <h2>Tutor sign-in</h2>
+      <p class="auth-lede">Please sign in with your Genius Google account to submit your TLC slips.</p>
+      <button type="button" id="signin-btn" class="btn btn-primary btn-lg signin-btn" disabled onclick="window.__signIn && window.__signIn()">
+        <svg width="18" height="18" viewBox="0 0 48 48" aria-hidden="true">
+          <path fill="#FFC107" d="M43.6 20.5H42V20H24v8h11.3C33.7 32.9 29.3 36 24 36c-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.9 1.2 8 3.1l5.7-5.7C34.6 6.1 29.6 4 24 4 12.9 4 4 12.9 4 24s8.9 20 20 20c11 0 20-8 20-20 0-1.3-.1-2.3-.4-3.5z"/>
+          <path fill="#FF3D00" d="M6.3 14.7l6.6 4.8C14.7 15.1 19 12 24 12c3.1 0 5.9 1.2 8 3.1l5.7-5.7C34.6 6.1 29.6 4 24 4 16.3 4 9.7 8.3 6.3 14.7z"/>
+          <path fill="#4CAF50" d="M24 44c5.2 0 10-2 13.6-5.2l-6.3-5.3C29.2 35 26.7 36 24 36c-5.3 0-9.7-3.1-11.3-7.4l-6.5 5C9.5 39.6 16.2 44 24 44z"/>
+          <path fill="#1976D2" d="M43.6 20.5H42V20H24v8h11.3c-.8 2.2-2.2 4.1-4 5.5l6.3 5.3C41.8 35.5 44 30.2 44 24c0-1.3-.1-2.3-.4-3.5z"/>
+        </svg>
+        <span class="signin-label">Connecting…</span>
+      </button>
+      <p id="auth-error" class="auth-error" role="alert" hidden></p>
+      <p class="auth-note">🔒 We only use your name to fill in the form. Your slips are built in your browser and never uploaded.</p>
+    </div>
+  </section>
+
+  <main id="main" class="page" hidden>
     <section class="intro">
       <h1>Submit your monthly TLC slips</h1>
       <p class="lede">

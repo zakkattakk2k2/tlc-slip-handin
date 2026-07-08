@@ -69,6 +69,31 @@ You only need to connect it to the **new** GitHub repo and push.
 
 ---
 
+## ⚠️ One extra step: allow sign-in on your live site
+
+The app requires a **Google sign-in** (same Firebase project as the Schedule Maker,
+`schedulemaker-c212c`). Google will only show the sign-in popup on domains you've
+approved, so after your site is live you must add its address once:
+
+1. Go to the **Firebase console**: https://console.firebase.google.com/
+2. Open the **schedulemaker-c212c** project.
+3. Left sidebar → **Authentication** → **Settings** tab → **Authorized domains**.
+4. Click **Add domain** and enter your GitHub Pages host **without** `https://` or any path:
+
+   ```
+   <your-username>.github.io
+   ```
+
+5. Save. Sign-in now works on your live site (it may take a minute).
+
+**This does not affect the Schedule Maker.** Authorized domains is an *additive* list —
+you're adding a new domain, not changing the existing ones. `localhost` is already
+allowed, so local testing works without this step.
+
+> Want to limit sign-in to Genius accounts only? Open `index.html`, find
+> `const ALLOWED_DOMAIN = '';` near the Firebase block, and set it to
+> `'geniuspremium.com'`. Anyone signing in with a different account is politely turned away.
+
 ## Updating the app later
 
 - **Method A:** repeat the upload (GitHub replaces the changed files in *this* repo only).
