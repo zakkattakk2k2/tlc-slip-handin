@@ -1,0 +1,48 @@
+// ============================================================================
+//  TLC Slip Hand-in — Firestore security rules
+//
+//  Paste this WHOLE file into:
+//    Firebase console > Firestore Database > Rules > (select all, replace) > Publish
+//
+//  This belongs to the NEW tlc-slips project only. It is a separate Firebase
+//  project from the Schedule Maker and from Sell Bios, so publishing it cannot
+//  affect either of those.
+//
+//  The rule that matters: a tutor can read and write ONLY their own slips.
+//  The app is written to respect that, but the app runs on the tutor's phone
+//  and anyone can edit what runs on their own phone — so the boundary is
+//  enforced here, on the server, where it cannot be edited.
+// ============================================================================
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // A signed-in Genius Premium account with a verified address. Anyone
+    // outside the domain is refused, including signed-in Google users.
+    function isStaff() {
+      return request.auth != null
+          && request.auth.token.email != null
+          && request.auth.token.email_verified == true
+          && request.auth.token.email.matches('.*@geniuspremium[.]com');
+    }
+
+    // The signed-in tutor, and only for their own uid.
+    function isSelf(uid) {
+      return isStaff() && request.auth.uid == uid;
+    }
+
+    // ------------------------------------------------------------------
+    //  A tutor's own slips, appendices and profile
+    // ------------------------------------------------------------------
+    match /artifacts/genius-tlcslips/users/{uid}/{document=**} {
+      allow read, write, delete: if isSelf(uid);
+    }
+
+    // ------------------------------------------------------------------
+    //  Everything else is denied
+    // ------------------------------------------------------------------
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

@@ -1,70 +1,45 @@
 /* ============================================================================
    Genius Premium Tuition — TLC Slip Hand-in
-   Client-side PDF builder. No backend: the uploaded PDF and the entered
-   details never leave the browser.
+   app.js — sign-in, the four tabs, and everything that is not detection.
 
-   Flow:
-     1. User uploads a scanned slips PDF (or JPG/PNG scans).
-     2. User fills details + draws a signature.
-     3. On Generate we overlay the details + signature onto the branded
-        cover template (assets/cover-template.pdf) and append the slip pages.
-     4. The combined PDF auto-downloads; a "Download again" button re-serves it.
+   WHAT CHANGED FROM THE ORIGINAL
+   The first version of this app was a single form: upload a scan of the whole
+   month, fill in the cover, download a combined PDF. It stored nothing, which
+   meant every tutor still had to collect a month of paper slips and scan them
+   in one go.
 
-   Libraries (loaded via CDN in index.html):
-     - pdf-lib      → window.PDFLib
-     - signature_pad→ window.SignaturePad
+   Now a slip is captured the day it happens — photographed in the app or
+   uploaded — cropped to the slip alone, saved, and shared to WhatsApp. At the
+   end of the month the hand-in builds itself from what is already stored.
+
+   The old path is still here. "Compile" accepts a scanned PDF instead of the
+   stored slips, so a tutor who prefers the office copier is not forced to
+   change how they work.
    ========================================================================== */
 
-'use strict';
+import { initializeApp } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js';
+import {
+  getAuth, onAuthStateChanged, signInWithPopup, GoogleAuthProvider, signOut,
+} from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js';
 
-/* ────────────────────────────────────────────────────────────────────────
-   COVER OVERLAY COORDINATE MAP  ⭐ NON-DEVELOPERS: EDIT HERE ⭐
-   ------------------------------------------------------------------------
-   pdf-lib origin = BOTTOM-LEFT. The cover page is US Letter: 612 × 792 pt.
-   x grows rightward, y grows upward. After a first render, nudge any value
-   by a few points until the text sits neatly on its line.
-   If you replace assets/cover-template.pdf, re-check these against the new
-   template.
-   ──────────────────────────────────────────────────────────────────────── */
-const COVER = {
-  page:      { width: 612, height: 792 },
-  font:      { size: 10.5, color: { r: 0.14, g: 0.12, b: 0.13 } }, // near-black
-  // Calibrated to "GLE Payslip Hand in form v2.3" (measured from the actual
-  // template with pdf.js). Each y is the label's text baseline; values are
-  // drawn on that same baseline just to the right of the label.
-  fields: {
-    // y is ~3 pt ABOVE each printed underline so text rests cleanly above the
-    // line (not touching it). Underlines sit at y≈641 / 615 / 589 / 228.
-    name:            { x: 128, y: 643.5 }, // Name line        (line: x≈126, y≈641)
-    payMonth:        { x: 128, y: 617.5 }, // Pay Month line   (line: x≈126, y≈615)
-    dateIssued:      { x: 128, y: 591.5 }, // Date Issued line (line: x≈126, y≈589)
-    syndicateCount:  { x: 206, y: 427.5 }, // "attended: ____" blank (underscore y≈425)
-    declarationName: { x: 58,  y: 230.0 }, // "I, ____ hereby…" (line: x≈54, y≈228)
-  },
-  // Blank after each numbered "1." … "5." on the "Dates (day only)" line.
-  // y is ~2.5 pt above the underscores (which sit at y≈392) for a clean gap.
-  syndicateDates: [
-    { x: 60,  y: 394.5 },
-    { x: 118, y: 394.5 },
-    { x: 179, y: 394.5 },
-    { x: 238, y: 394.5 },
-    { x: 293, y: 394.5 },
-  ],
-  // Signature PNG: bottom-left anchor next to "Signed:" (baseline y≈178),
-  // scaled to fit this box (aspect ratio preserved, never stretched/enlarged).
-  signature: { x: 92, y: 158, maxWidth: 180, maxHeight: 40 },
-};
+import {
+  initStore, listSlips, listMonths, deleteSlip, saveSlip, todayISO,
+  saveAppendix, listAppendices, deleteAppendix, reorderAppendices,
+  loadProfile, saveProfile, encodeSlip, dataUrlBytes,
+} from './js/store.js';
+import { initCapture, suspendCapture } from './js/capture.js';
+import { shareSlip, copyCaption, longDate } from './js/share.js';
+import { renderSlip, loadImage, fontsReady } from './js/digital.js';
+import { buildHandInPdf, MAX_SYNDICATES, sanitizeFilename } from './js/compile.js';
 
-const COVER_TEMPLATE_URL = 'assets/cover-template.pdf';
-const MAX_SYNDICATES = 5;
-
-/* ────────────────────────────────────────────────────────────────────────
-   Small helpers
-   ──────────────────────────────────────────────────────────────────────── */
 const $ = (id) => document.getElementById(id);
 
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June',
   'July', 'August', 'September', 'October', 'November', 'December'];
+
+/* ────────────────────────────────────────────────────────────────────────
+   Small formatting helpers (unchanged from the original app)
+   ──────────────────────────────────────────────────────────────────────── */
 
 /** "2026-06" → "June 2026". Parsed by parts to avoid timezone drift. */
 function formatPayMonth(value) {
@@ -74,281 +49,457 @@ function formatPayMonth(value) {
   return `${MONTHS[m - 1]} ${y}`;
 }
 
-/** "2026-07-01" → "1 July 2026" (no leading zero on the day). */
-function formatLongDate(value) {
-  if (!value) return '';
-  const [y, m, d] = value.split('-').map(Number);
-  if (!y || !m || !d) return '';
-  return `${d} ${MONTHS[m - 1]} ${y}`;
-}
-
 /** "2026-07-14" → "14" (day only, no leading zero). */
 function formatDayOnly(value) {
   if (!value) return '';
-  const parts = value.split('-');
-  const d = Number(parts[2]);
+  const d = Number((value.split('-'))[2]);
   return d ? String(d) : '';
 }
 
-/** Local "today" as yyyy-mm-dd for the date input default. */
-function todayISO() {
-  const now = new Date();
-  const p = (n) => String(n).padStart(2, '0');
-  return `${now.getFullYear()}-${p(now.getMonth() + 1)}-${p(now.getDate())}`;
-}
+const escapeHtml = (s) => String(s == null ? '' : s)
+  .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 
-/** Make a string safe for a filename across OSes. */
-function sanitizeFilename(s) {
-  return (s || '')
-    .replace(/[\\/:*?"<>|]+/g, ' ')  // illegal filename chars
-    .replace(/\s+/g, ' ')
-    .trim() || 'Unknown';
+function showError(id, msg) { const el = $(id); if (el) el.textContent = msg; }
+function clearError(id) { showError(id, ''); }
+
+function toast(msg) {
+  if (!msg) return;
+  const el = $('toast');
+  el.textContent = msg;
+  el.hidden = false;
+  el.classList.add('is-shown');
+  clearTimeout(toast._t);
+  toast._t = setTimeout(() => {
+    el.classList.remove('is-shown');
+    setTimeout(() => { el.hidden = true; }, 300);
+  }, 3200);
 }
 
 /* ────────────────────────────────────────────────────────────────────────
-   State
+   Application state
    ──────────────────────────────────────────────────────────────────────── */
-let uploadedFile = null;         // the raw File the user chose
-let lastBlobUrl = null;          // object URL of the last generated PDF
-let lastFilename = 'TLC Slip Handin.pdf';
-let signaturePad = null;
+
+const app = {
+  user: null,
+  tutorName: '',
+  month: (todayISO()).slice(0, 7),
+  slips: [],
+  appendices: [],
+  pads: {},                 // SignaturePad instances, by canvas id
+  lastSaved: null,
+};
 
 /* ────────────────────────────────────────────────────────────────────────
-   Signature pad (high-DPI aware)
+   Signature pads
    ──────────────────────────────────────────────────────────────────────── */
-function initSignaturePad() {
-  const canvas = $('signature-pad');
-  signaturePad = new window.SignaturePad(canvas, {
+
+function makePad(canvasId, clearBtnId) {
+  const canvas = $(canvasId);
+  if (!canvas || !window.SignaturePad) return null;
+
+  const pad = new window.SignaturePad(canvas, {
     penColor: '#1A1816',
     minWidth: 0.7,
     maxWidth: 2.2,
-    backgroundColor: 'rgba(0,0,0,0)', // transparent → clean PNG for overlay
+    backgroundColor: 'rgba(0,0,0,0)',      // transparent → a clean PNG to overlay
   });
 
-  // Scale the backing store by devicePixelRatio so strokes stay crisp and
-  // the exported PNG is high resolution. Preserve any existing drawing.
-  function resizeCanvas() {
+  /* Scale the backing store by devicePixelRatio so strokes stay crisp and the
+     exported PNG is high resolution. Also re-run whenever the pad becomes
+     visible: a canvas inside a hidden tab measures 0x0, and a pad sized 0x0
+     exports an empty image no matter how carefully it was signed. */
+  const resize = () => {
+    if (!canvas.offsetWidth) return;
     const ratio = Math.max(window.devicePixelRatio || 1, 1);
-    const data = signaturePad.toData();
+    const data = pad.toData();
     canvas.width = canvas.offsetWidth * ratio;
     canvas.height = canvas.offsetHeight * ratio;
     canvas.getContext('2d').scale(ratio, ratio);
-    signaturePad.clear();
-    if (data && data.length) signaturePad.fromData(data);
-  }
+    pad.clear();
+    if (data && data.length) pad.fromData(data);
+  };
 
-  resizeCanvas();
-  window.addEventListener('resize', resizeCanvas);
+  resize();
+  pad._resize = resize;
 
-  $('sig-clear').addEventListener('click', () => {
-    signaturePad.clear();
-    clearError('signature-err');
-  });
+  const clearBtn = $(clearBtnId);
+  if (clearBtn) clearBtn.addEventListener('click', () => pad.clear());
 
-  $('sig-undo').addEventListener('click', () => {
-    const data = signaturePad.toData();
-    if (data && data.length) {
-      data.pop();
-      signaturePad.fromData(data);
+  app.pads[canvasId] = pad;
+  return pad;
+}
+
+/** isEmpty() only flips once a stroke forms, so consult the stroke data too. */
+const padHasInk = (pad) => !!pad && (!pad.isEmpty() || pad.toData().length > 0);
+
+const resizeAllPads = () => Object.values(app.pads).forEach((p) => p._resize && p._resize());
+
+/* ────────────────────────────────────────────────────────────────────────
+   Tabs
+   ──────────────────────────────────────────────────────────────────────── */
+
+const TABS = ['capture', 'month', 'digital', 'compile'];
+
+function selectTab(which) {
+  TABS.forEach((key) => {
+    const on = key === which;
+    const tab = $(`tab-${key}`);
+    const panel = $(`panel-${key}`);
+    if (tab) {
+      tab.setAttribute('aria-selected', on ? 'true' : 'false');
+      tab.classList.toggle('is-active', on);
     }
+    if (panel) panel.hidden = !on;
   });
+
+  if (which !== 'capture') suspendCapture();
+  if (which === 'month') refreshMonth();
+  if (which === 'compile') refreshCompile();
+  // Pads in a freshly revealed tab were 0x0 a moment ago.
+  setTimeout(resizeAllPads, 40);
+  if (which === 'digital') setTimeout(renderDigitalPreview, 60);
 }
 
 /* ────────────────────────────────────────────────────────────────────────
-   File upload (click, keyboard, drag & drop)
+   This month
    ──────────────────────────────────────────────────────────────────────── */
-function initUpload() {
-  const dropzone = $('dropzone');
-  const input = $('file-input');
 
-  const openPicker = () => input.click();
-  dropzone.addEventListener('click', openPicker);
-  dropzone.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openPicker(); }
-  });
+async function refreshMonth() {
+  const list = $('month-list');
+  const summary = $('month-summary');
+  if (!app.user) { list.innerHTML = ''; return; }
 
-  input.addEventListener('change', () => {
-    if (input.files && input.files[0]) acceptFile(input.files[0]);
-  });
-
-  ['dragenter', 'dragover'].forEach((evt) =>
-    dropzone.addEventListener(evt, (e) => {
-      e.preventDefault();
-      dropzone.classList.add('dragover');
-    }));
-  ['dragleave', 'dragend', 'drop'].forEach((evt) =>
-    dropzone.addEventListener(evt, (e) => {
-      e.preventDefault();
-      dropzone.classList.remove('dragover');
-    }));
-  dropzone.addEventListener('drop', (e) => {
-    const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
-    if (f) acceptFile(f);
-  });
-}
-
-const PDF_TYPES = ['application/pdf'];
-const IMG_TYPES = ['image/jpeg', 'image/png'];
-
-function acceptFile(file) {
-  clearError('file-error');
-  const type = (file.type || '').toLowerCase();
-  const name = (file.name || '').toLowerCase();
-  const looksPdf = type === 'application/pdf' || name.endsWith('.pdf');
-  const looksImg = IMG_TYPES.includes(type) ||
-    /\.(jpe?g|png)$/.test(name);
-
-  if (!looksPdf && !looksImg) {
-    uploadedFile = null;
-    $('file-status').textContent = '';
-    $('dropzone').classList.remove('has-file');
-    showError('file-error', 'That file type isn’t supported. Please upload a PDF (or a JPG/PNG scan).');
+  list.innerHTML = '<p class="muted">Loading…</p>';
+  try {
+    await refreshMonthPicker();
+    app.slips = await listSlips(app.month);
+  } catch (e) {
+    console.error(e);
+    list.innerHTML = `<p class="field-error">Could not load your slips. ${escapeHtml(e.message || '')}</p>`;
     return;
   }
 
-  uploadedFile = file;
-  const kb = file.size / 1024;
-  const size = kb > 1024 ? `${(kb / 1024).toFixed(1)} MB` : `${Math.round(kb)} KB`;
-  $('file-status').textContent = `✓ ${file.name} (${size})`;
-  $('dropzone').classList.add('has-file');
+  if (!app.slips.length) {
+    summary.textContent = '';
+    list.innerHTML = '<div class="empty"><p><strong>No slips saved for this month yet.</strong></p>'
+      + '<p class="muted">Capture one on the “Add a slip” tab, or fill in a digital slip.</p></div>';
+    return;
+  }
+
+  const hours = app.slips.reduce((a, s) => a + (parseFloat((s.meta || {}).hours) || 0), 0);
+  const bytes = app.slips.reduce((a, s) => a + dataUrlBytes(s.image), 0);
+  summary.textContent =
+    `${app.slips.length} slip${app.slips.length === 1 ? '' : 's'}`
+    + (hours ? ` · ${+hours.toFixed(2)} hours` : '')
+    + ` · ${(bytes / 1024 / 1024).toFixed(1)} MB stored`;
+
+  list.innerHTML = app.slips.map((s) => {
+    const m = s.meta || {};
+    const detail = [m.student, m.subject, m.hours ? `${m.hours}h` : ''].filter(Boolean).join(' · ');
+    return `
+      <article class="slip-card" data-id="${escapeHtml(s.id)}">
+        <img class="slip-thumb" src="${s.image}" alt="Slip for ${escapeHtml(longDate(s.date))}" loading="lazy" />
+        <div class="slip-body">
+          <p class="slip-date">${escapeHtml(longDate(s.date))}</p>
+          <p class="slip-detail">${escapeHtml(detail || 'No details entered')}</p>
+          ${s.source === 'digital' ? '<span class="pill">Digital slip</span>' : ''}
+        </div>
+        <div class="slip-actions">
+          <button type="button" class="btn btn-ghost btn-sm" data-act="share">Send</button>
+          <button type="button" class="btn btn-ghost btn-sm" data-act="copy">Copy caption</button>
+          <button type="button" class="btn btn-ghost btn-sm btn-danger" data-act="delete">Delete</button>
+        </div>
+      </article>`;
+  }).join('');
+}
+
+async function refreshMonthPicker() {
+  const picker = $('month-picker');
+  const months = await listMonths();
+  const known = new Set(months.map((m) => m.month));
+  known.add(app.month);
+
+  const options = [...known].sort().reverse();
+  picker.innerHTML = options.map((m) => {
+    const found = months.find((x) => x.month === m);
+    const count = found ? ` (${found.count})` : '';
+    return `<option value="${m}"${m === app.month ? ' selected' : ''}>${formatPayMonth(m)}${count}</option>`;
+  }).join('');
+}
+
+async function onMonthListClick(e) {
+  const btn = e.target.closest('[data-act]');
+  if (!btn) return;
+  const card = e.target.closest('.slip-card');
+  const slip = app.slips.find((s) => s.id === card.dataset.id);
+  if (!slip) return;
+
+  if (btn.dataset.act === 'share') {
+    toast(await shareSlip(slip, app.tutorName));
+  } else if (btn.dataset.act === 'copy') {
+    toast(await copyCaption(slip, app.tutorName));
+  } else if (btn.dataset.act === 'delete') {
+    // A slip is a payroll record; deleting one by accident is expensive.
+    if (!window.confirm(`Delete the slip for ${longDate(slip.date)}? This cannot be undone.`)) return;
+    try {
+      await deleteSlip(slip.id);
+      toast('Slip deleted');
+      refreshMonth();
+    } catch (err) {
+      console.error(err);
+      toast('Could not delete that slip.');
+    }
+  }
 }
 
 /* ────────────────────────────────────────────────────────────────────────
-   Syndicate date inputs — count drives how many appear (cap 5)
+   Digital slip
    ──────────────────────────────────────────────────────────────────────── */
-function initSyndicates() {
-  const countInput = $('syndicate-count');
-  countInput.addEventListener('input', renderSyndicateDates);
-  countInput.addEventListener('change', renderSyndicateDates);
-  renderSyndicateDates();
+
+function digitalValues() {
+  return {
+    date: $('dig-date').value || todayISO(),
+    timeFrom: $('dig-from').value,
+    timeTo: $('dig-to').value,
+    subject: $('dig-subject').value.trim(),
+    hours: $('dig-hours').value.trim(),
+    student: $('dig-student').value.trim(),
+    tutor: $('dig-tutor').value.trim() || app.tutorName,
+    notes: $('dig-notes').value.trim(),
+  };
+}
+
+async function renderDigitalPreview() {
+  await fontsReady();
+  const values = digitalValues();
+
+  const studentPad = app.pads['dig-sig-student'];
+  const tutorPad = app.pads['dig-sig-tutor'];
+  values.studentSig = padHasInk(studentPad) ? await loadImage(studentPad.toDataURL('image/png')) : null;
+  values.tutorSig = padHasInk(tutorPad) ? await loadImage(tutorPad.toDataURL('image/png')) : null;
+
+  const canvas = renderSlip(values, { width: 900 });
+  canvas.className = 'dig-preview-canvas';
+  canvas.setAttribute('role', 'img');
+  canvas.setAttribute('aria-label', 'Preview of the completed lesson slip');
+
+  const holder = $('dig-preview');
+  holder.innerHTML = '';
+  holder.appendChild(canvas);
+  return canvas;
+}
+
+function validateDigital() {
+  const problems = [];
+  const v = digitalValues();
+  if (!v.date) problems.push('Choose the lesson date.');
+  if (!v.subject) problems.push('Enter the subject.');
+  if (!v.student) problems.push('Enter the student’s name.');
+  if (!v.tutor) problems.push('Enter the tutor’s name.');
+  if (!padHasInk(app.pads['dig-sig-student'])) problems.push('The student still needs to sign.');
+  if (!padHasInk(app.pads['dig-sig-tutor'])) problems.push('The tutor still needs to sign.');
+
+  const box = $('dig-error');
+  if (problems.length) {
+    box.hidden = false;
+    box.innerHTML = '<strong>Before this slip can be saved:</strong><ul>'
+      + problems.map((p) => `<li>${escapeHtml(p)}</li>`).join('') + '</ul>';
+    box.setAttribute('tabindex', '-1');
+    box.focus();
+    return null;
+  }
+  box.hidden = true;
+  return v;
+}
+
+async function saveDigital() {
+  const values = validateDigital();
+  if (!values) return;
+
+  const btn = $('dig-save');
+  btn.disabled = true;
+  try {
+    const canvas = await renderDigitalPreview();
+    const { dataUrl } = encodeSlip(canvas);
+    const record = await saveSlip({
+      image: dataUrl,
+      date: values.date,
+      source: 'digital',
+      width: canvas.width,
+      height: canvas.height,
+      meta: {
+        student: values.student,
+        subject: values.subject,
+        hours: values.hours,
+        timeFrom: values.timeFrom,
+        timeTo: values.timeTo,
+        notes: values.notes,
+        tutor: values.tutor,
+      },
+    });
+
+    app.lastSaved = record;
+    $('dig-done').hidden = false;
+    toast('Digital slip saved ✓');
+  } catch (e) {
+    console.error(e);
+    toast(`Could not save: ${e.message || 'unexpected error'}`);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+function resetDigital() {
+  ['dig-subject', 'dig-hours', 'dig-student', 'dig-notes', 'dig-from', 'dig-to']
+    .forEach((id) => { $(id).value = ''; });
+  $('dig-date').value = todayISO();
+  Object.entries(app.pads).forEach(([id, pad]) => { if (id.startsWith('dig-')) pad.clear(); });
+  $('dig-done').hidden = true;
+  $('dig-error').hidden = true;
+  app.lastSaved = null;
+  renderDigitalPreview();
+}
+
+/* ────────────────────────────────────────────────────────────────────────
+   Compile
+   ──────────────────────────────────────────────────────────────────────── */
+
+async function refreshCompile() {
+  if (!app.user) return;
+  $('cmp-month').value = app.month;
+  if (!$('cmp-pay-month').value) $('cmp-pay-month').value = app.month;
+
+  try {
+    app.slips = await listSlips(app.month);
+    app.appendices = await listAppendices(app.month);
+  } catch (e) {
+    console.error(e);
+  }
+
+  const n = app.slips.length;
+  $('cmp-slip-count').textContent = n
+    ? `${n} saved slip${n === 1 ? '' : 's'} will be added after the cover page, in date order.`
+    : 'No saved slips for this month — either capture some, or attach a scanned PDF below.';
+
+  renderAppendixList();
+  updateCoverPreview();
+}
+
+function renderAppendixList() {
+  const list = $('cmp-appendix-list');
+  if (!app.appendices.length) {
+    list.innerHTML = '<li class="muted apx-empty">Nothing appended yet.</li>';
+    return;
+  }
+  list.innerHTML = app.appendices.map((a, i) => `
+    <li class="apx-row" data-id="${escapeHtml(a.id)}">
+      <span class="apx-name">${escapeHtml(a.name)}</span>
+      <span class="apx-size muted">${(a.bytes / 1024).toFixed(0)} KB</span>
+      <span class="apx-tools">
+        <button type="button" class="btn btn-ghost btn-sm" data-act="up" ${i === 0 ? 'disabled' : ''} aria-label="Move up">↑</button>
+        <button type="button" class="btn btn-ghost btn-sm" data-act="down" ${i === app.appendices.length - 1 ? 'disabled' : ''} aria-label="Move down">↓</button>
+        <button type="button" class="btn btn-ghost btn-sm btn-danger" data-act="remove">Remove</button>
+      </span>
+    </li>`).join('');
+}
+
+async function onAppendixClick(e) {
+  const btn = e.target.closest('[data-act]');
+  if (!btn) return;
+  const row = e.target.closest('.apx-row');
+  const idx = app.appendices.findIndex((a) => a.id === row.dataset.id);
+  if (idx < 0) return;
+
+  if (btn.dataset.act === 'remove') {
+    if (!window.confirm(`Remove “${app.appendices[idx].name}” from this month?`)) return;
+    try {
+      await deleteAppendix(app.appendices[idx]);
+      app.appendices.splice(idx, 1);
+      renderAppendixList();
+      toast('Removed');
+    } catch (err) {
+      console.error(err);
+      toast('Could not remove that document.');
+    }
+    return;
+  }
+
+  const to = btn.dataset.act === 'up' ? idx - 1 : idx + 1;
+  if (to < 0 || to >= app.appendices.length) return;
+  const [moved] = app.appendices.splice(idx, 1);
+  app.appendices.splice(to, 0, moved);
+  renderAppendixList();
+  try {
+    await reorderAppendices(app.appendices);
+  } catch (err) {
+    console.error(err);
+    toast('New order could not be saved.');
+  }
 }
 
 function renderSyndicateDates() {
-  const wrap = $('syndicate-dates');
-  const list = $('syndicate-date-list');
-  const capNote = $('syndicate-cap-note');
+  const wrap = $('cmp-syndicate-dates');
+  const list = $('cmp-syndicate-list');
+  const capNote = $('cmp-syndicate-cap');
 
-  let n = parseInt($('syndicate-count').value, 10);
+  let n = parseInt($('cmp-syndicate-count').value, 10);
   if (Number.isNaN(n) || n < 0) n = 0;
 
   capNote.hidden = n <= MAX_SYNDICATES;
   if (n > MAX_SYNDICATES) n = MAX_SYNDICATES;
-
   wrap.hidden = n === 0;
 
-  // Preserve any dates the user already typed.
   const existing = Array.from(list.querySelectorAll('input')).map((i) => i.value);
-
   list.innerHTML = '';
   for (let i = 0; i < n; i++) {
     const field = document.createElement('div');
     field.className = 'field';
-
     const label = document.createElement('label');
-    label.setAttribute('for', `syndicate-date-${i}`);
+    label.setAttribute('for', `cmp-syn-${i}`);
     label.textContent = `Syndicate ${i + 1}`;
-
     const input = document.createElement('input');
     input.type = 'date';
-    input.id = `syndicate-date-${i}`;
-    input.name = `syndicate-date-${i}`;
+    input.id = `cmp-syn-${i}`;
     input.className = 'syndicate-date';
     if (existing[i]) input.value = existing[i];
-    input.addEventListener('input', updatePreview);
-    input.addEventListener('change', updatePreview);
-
+    input.addEventListener('change', updateCoverPreview);
     field.append(label, input);
     list.append(field);
   }
-  updatePreview();
+  updateCoverPreview();
 }
 
-function getSyndicateDates() {
-  return Array.from(document.querySelectorAll('#syndicate-date-list input'))
-    .map((i) => i.value);
-}
+const syndicateDates = () =>
+  Array.from(document.querySelectorAll('#cmp-syndicate-list input')).map((i) => i.value);
 
-/* ────────────────────────────────────────────────────────────────────────
-   Live preview ("as it will appear on the form")
-   ──────────────────────────────────────────────────────────────────────── */
-function initPreview() {
-  ['pay-month', 'date-issued'].forEach((id) => {
-    $(id).addEventListener('input', updatePreview);
-    $(id).addEventListener('change', updatePreview);
-  });
-  updatePreview();
-}
-
-function updatePreview() {
-  $('pv-pay-month').textContent = formatPayMonth($('pay-month').value) || '—';
-  $('pv-date-issued').textContent = formatLongDate($('date-issued').value) || '—';
-
-  const days = getSyndicateDates().map(formatDayOnly).filter(Boolean);
+function updateCoverPreview() {
+  $('pv-pay-month').textContent = formatPayMonth($('cmp-pay-month').value) || '—';
+  $('pv-date-issued').textContent = $('cmp-date-issued').value
+    ? longDate($('cmp-date-issued').value) : '—';
+  const days = syndicateDates().map(formatDayOnly).filter(Boolean);
   $('pv-syndicate-dates').textContent = days.length ? days.join(', ') : '—';
 }
 
-/* ────────────────────────────────────────────────────────────────────────
-   Error display helpers
-   ──────────────────────────────────────────────────────────────────────── */
-function showError(id, msg) { $(id).textContent = msg; }
-function clearError(id) { $(id).textContent = ''; }
-
-function markInvalid(inputId, on) {
-  const el = $(inputId);
-  if (el) el.classList.toggle('invalid', !!on);
-}
-
-function clearAllErrors() {
-  ['full-name-err', 'pay-month-err', 'date-issued-err', 'syndicate-count-err',
-    'signature-err', 'file-error'].forEach(clearError);
-  ['full-name', 'pay-month', 'date-issued', 'syndicate-count'].forEach((i) => markInvalid(i, false));
-  const box = $('form-error');
-  box.hidden = true;
-  box.innerHTML = '';
-}
-
-/* ────────────────────────────────────────────────────────────────────────
-   Validation
-   ──────────────────────────────────────────────────────────────────────── */
-function validate() {
-  clearAllErrors();
+function validateCompile() {
   const problems = [];
+  ['cmp-name-err', 'cmp-pay-month-err', 'cmp-date-issued-err', 'cmp-syndicate-err']
+    .forEach(clearError);
 
-  if (!uploadedFile) {
-    showError('file-error', 'Please upload your scanned slips first.');
-    problems.push('Upload your scanned slips (PDF or JPG/PNG).');
-  }
+  const name = $('cmp-name').value.trim();
+  if (!name) { showError('cmp-name-err', 'Your full name is required.'); problems.push('Enter your full name.'); }
+  if (!$('cmp-pay-month').value) { showError('cmp-pay-month-err', 'Choose the pay month.'); problems.push('Choose the pay month.'); }
+  if (!$('cmp-date-issued').value) { showError('cmp-date-issued-err', 'Choose the date issued.'); problems.push('Choose the date issued.'); }
 
-  const name = $('full-name').value.trim();
-  if (!name) {
-    showError('full-name-err', 'Your full name is required.');
-    markInvalid('full-name', true);
-    problems.push('Enter your full name.');
-  }
-
-  if (!$('pay-month').value) {
-    showError('pay-month-err', 'Choose the pay month.');
-    markInvalid('pay-month', true);
-    problems.push('Choose the pay month.');
-  }
-
-  if (!$('date-issued').value) {
-    showError('date-issued-err', 'Choose the date issued.');
-    markInvalid('date-issued', true);
-    problems.push('Choose the date issued.');
-  }
-
-  let count = parseInt($('syndicate-count').value, 10);
-  if ($('syndicate-count').value === '' || Number.isNaN(count) || count < 0 || count > MAX_SYNDICATES) {
-    showError('syndicate-count-err', 'Enter a number from 0 to 5.');
-    markInvalid('syndicate-count', true);
+  let count = parseInt($('cmp-syndicate-count').value, 10);
+  if ($('cmp-syndicate-count').value === '' || Number.isNaN(count) || count < 0 || count > MAX_SYNDICATES) {
+    showError('cmp-syndicate-err', 'Enter a number from 0 to 5.');
     problems.push('Enter how many syndicates you attended (0–5).');
     count = null;
   }
 
-  // Require a date for each declared syndicate.
-  if (count && count > 0) {
-    const dates = getSyndicateDates();
+  if (count) {
+    const dates = syndicateDates();
     const missing = [];
     for (let i = 0; i < count; i++) if (!dates[i]) missing.push(i + 1);
     if (missing.length) {
@@ -356,218 +507,295 @@ function validate() {
     }
   }
 
-  // Robust emptiness check: isEmpty() only flips once a stroke forms, so also
-  // consult the captured stroke data.
-  const hasSignature = signaturePad &&
-    (!signaturePad.isEmpty() || signaturePad.toData().length > 0);
-  if (!hasSignature) {
-    showError('signature-err', 'Please draw your signature.');
-    problems.push('Draw your signature.');
+  if (!padHasInk(app.pads['cmp-signature'])) problems.push('Draw your signature.');
+
+  const scanned = $('cmp-scan-file').files[0] || null;
+  if (!scanned && !app.slips.length && !app.appendices.length) {
+    problems.push('There is nothing to hand in yet — capture some slips, or attach a scanned PDF.');
   }
 
+  const box = $('cmp-error');
   if (problems.length) {
-    const box = $('form-error');
     box.hidden = false;
-    box.innerHTML =
-      '<strong>Please fix the following before generating:</strong>' +
-      '<ul>' + problems.map((p) => `<li>${p}</li>`).join('') + '</ul>';
-    // Focus the error summary for keyboard/screen-reader users.
+    box.innerHTML = '<strong>Please fix the following before generating:</strong><ul>'
+      + problems.map((p) => `<li>${escapeHtml(p)}</li>`).join('') + '</ul>';
     box.setAttribute('tabindex', '-1');
     box.focus();
     return null;
   }
+  box.hidden = true;
 
   return {
     name,
-    payMonth: formatPayMonth($('pay-month').value),
-    dateIssued: formatLongDate($('date-issued').value),
+    payMonth: formatPayMonth($('cmp-pay-month').value),
+    dateIssued: longDate($('cmp-date-issued').value),
     syndicateCount: count,
-    syndicateDates: getSyndicateDates().slice(0, count).map(formatDayOnly),
+    syndicateDates: syndicateDates().slice(0, count).map(formatDayOnly),
+    signaturePng: app.pads['cmp-signature'].toDataURL('image/png'),
+    scanned,
   };
 }
 
-/* ────────────────────────────────────────────────────────────────────────
-   Status helpers
-   ──────────────────────────────────────────────────────────────────────── */
-function setStatus(msg, kind) {
-  const el = $('status');
-  el.hidden = false;
-  el.className = 'status' + (kind ? ` ${kind}` : '');
-  el.textContent = msg;
-}
-function hideStatus() { $('status').hidden = true; }
+let lastPdfUrl = null;
+let lastPdfName = 'TLC Slip Handin.pdf';
 
-/* ────────────────────────────────────────────────────────────────────────
-   PDF assembly
-   ──────────────────────────────────────────────────────────────────────── */
-async function fetchCoverTemplate() {
-  let res;
-  try {
-    res = await fetch(COVER_TEMPLATE_URL);
-  } catch (e) {
-    throw new Error('Could not load the branded cover template. Check that assets/cover-template.pdf exists.');
-  }
-  if (!res.ok) {
-    throw new Error('The branded cover template (assets/cover-template.pdf) is missing. Add it to the assets folder and try again.');
-  }
-  return res.arrayBuffer();
-}
-
-async function buildCombinedPdf(data) {
-  const { PDFDocument, StandardFonts, rgb } = window.PDFLib;
-
-  // 1 ─ Load the branded cover template as the output document.
-  const templateBytes = await fetchCoverTemplate();
-  const pdfDoc = await PDFDocument.load(templateBytes);
-  const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
-  const page = pdfDoc.getPage(0);
-
-  const { size, color } = COVER.font;
-  const ink = rgb(color.r, color.g, color.b);
-  const draw = (text, pos) => {
-    if (!text) return;
-    page.drawText(String(text), { x: pos.x, y: pos.y, size, font, color: ink });
-  };
-
-  // 2 ─ Draw field values on the cover.
-  draw(data.name, COVER.fields.name);
-  draw(data.payMonth, COVER.fields.payMonth);
-  draw(data.dateIssued, COVER.fields.dateIssued);
-  draw(String(data.syndicateCount), COVER.fields.syndicateCount);
-  draw(data.name, COVER.fields.declarationName); // repeat name in "I, ____"
-
-  data.syndicateDates.forEach((day, i) => {
-    if (COVER.syndicateDates[i]) draw(day, COVER.syndicateDates[i]);
-  });
-
-  // 3 ─ Embed the signature PNG and place it, scaled to fit (never stretched).
-  const sigPng = await pdfDoc.embedPng(signaturePad.toDataURL('image/png'));
-  const box = COVER.signature;
-  const scale = Math.min(box.maxWidth / sigPng.width, box.maxHeight / sigPng.height, 1);
-  const w = sigPng.width * scale;
-  const h = sigPng.height * scale;
-  page.drawImage(sigPng, { x: box.x, y: box.y, width: w, height: h });
-
-  // 4 ─ Append the uploaded slips after the cover.
-  await appendUpload(pdfDoc, PDFDocument);
-
-  // 5 ─ Serialize.
-  return pdfDoc.save();
-}
-
-/** Append the user's upload (PDF pages, or an image on its own page). */
-async function appendUpload(pdfDoc, PDFDocument) {
-  const bytes = await uploadedFile.arrayBuffer();
-  const type = (uploadedFile.type || '').toLowerCase();
-  const name = (uploadedFile.name || '').toLowerCase();
-  const isImage = IMG_TYPES.includes(type) || /\.(jpe?g|png)$/.test(name);
-
-  if (isImage) {
-    const img = /png$/.test(name) || type === 'image/png'
-      ? await pdfDoc.embedPng(bytes)
-      : await pdfDoc.embedJpg(bytes);
-    // Place the scan on its own US-Letter page, scaled to fit with a margin.
-    const { width: PW, height: PH } = COVER.page;
-    const margin = 36;
-    const scale = Math.min((PW - margin * 2) / img.width, (PH - margin * 2) / img.height, 1);
-    const w = img.width * scale;
-    const h = img.height * scale;
-    const page = pdfDoc.addPage([PW, PH]);
-    page.drawImage(img, { x: (PW - w) / 2, y: (PH - h) / 2, width: w, height: h });
-    return;
-  }
-
-  // PDF: copy every page in order and append.
-  let slipsDoc;
-  try {
-    slipsDoc = await PDFDocument.load(bytes);
-  } catch (e) {
-    if (/encrypt/i.test(e && e.message)) {
-      throw new Error('Your PDF is password-protected/encrypted. Please remove the protection and upload again.');
-    }
-    throw new Error('Your PDF could not be read. It may be corrupted or not a valid PDF. Please try a different file.');
-  }
-  const pages = await pdfDoc.copyPages(slipsDoc, slipsDoc.getPageIndices());
-  pages.forEach((p) => pdfDoc.addPage(p));
-}
-
-/* ────────────────────────────────────────────────────────────────────────
-   Download
-   ──────────────────────────────────────────────────────────────────────── */
 function triggerDownload(url, filename) {
   const a = document.createElement('a');
   a.href = url;
   a.download = filename;
   a.rel = 'noopener';
-  document.body.appendChild(a);
+  document.body.appendChild(a);      // Safari ignores detached anchors
   a.click();
   a.remove();
 }
 
-/* ────────────────────────────────────────────────────────────────────────
-   Generate handler
-   ──────────────────────────────────────────────────────────────────────── */
-async function onGenerate(e) {
+function setCompileStatus(msg, kind) {
+  const el = $('cmp-status');
+  el.hidden = !msg;
+  el.className = 'status' + (kind ? ` ${kind}` : '');
+  el.textContent = msg || '';
+}
+
+async function generate(e) {
   e.preventDefault();
-  const data = validate();
-  if (!data) return;
+  const cover = validateCompile();
+  if (!cover) return;
 
-  const btn = $('generate');
+  const btn = $('cmp-generate');
   btn.disabled = true;
-  $('download-again').hidden = true;
-  setStatus('Generating your combined PDF…', 'busy');
-
-  // Let the browser paint the busy state before the heavy work.
-  await new Promise((r) => setTimeout(r, 30));
+  $('cmp-download-again').hidden = true;
+  setCompileStatus('Building your hand-in…', 'busy');
+  await new Promise((r) => setTimeout(r, 30));   // let the busy state paint
 
   try {
-    const pdfBytes = await buildCombinedPdf(data);
-    const blob = new Blob([pdfBytes], { type: 'application/pdf' });
+    try { await saveProfile({ name: cover.name }); } catch { /* not fatal */ }
 
-    if (lastBlobUrl) URL.revokeObjectURL(lastBlobUrl);
-    lastBlobUrl = URL.createObjectURL(blob);
-    lastFilename = `TLC Slip Handin - ${sanitizeFilename(data.name)} - ${sanitizeFilename(data.payMonth)}.pdf`;
+    const bytes = await buildHandInPdf({
+      cover,
+      slips: cover.scanned ? [] : app.slips,
+      appendices: app.appendices,
+      perPage: parseInt($('cmp-per-page').value, 10) || 2,
+      scannedFile: cover.scanned,
+      onProgress: (m) => setCompileStatus(m, 'busy'),
+    });
 
-    triggerDownload(lastBlobUrl, lastFilename);
+    const blob = new Blob([bytes], { type: 'application/pdf' });
+    if (lastPdfUrl) URL.revokeObjectURL(lastPdfUrl);
+    lastPdfUrl = URL.createObjectURL(blob);
+    lastPdfName = `TLC Slip Handin - ${sanitizeFilename(cover.name)} - ${sanitizeFilename(cover.payMonth)}.pdf`;
 
-    setStatus(`✓ Done — "${lastFilename}" downloaded. If it didn't start, use “Download again”.`, 'done');
-    const again = $('download-again');
-    again.hidden = false;
+    triggerDownload(lastPdfUrl, lastPdfName);
+    setCompileStatus(`✓ Done — “${lastPdfName}” downloaded. If it didn’t start, use “Download again”.`, 'done');
+    $('cmp-download-again').hidden = false;
   } catch (err) {
     console.error(err);
-    hideStatus();
-    const box = $('form-error');
+    setCompileStatus('');
+    const box = $('cmp-error');
     box.hidden = false;
-    box.innerHTML = `<strong>Couldn't generate the PDF.</strong><p>${(err && err.message) || 'Unexpected error.'}</p>`;
+    box.innerHTML = `<strong>Couldn’t build the PDF.</strong><p>${escapeHtml((err && err.message) || 'Unexpected error.')}</p>`;
   } finally {
     btn.disabled = false;
   }
 }
 
 /* ────────────────────────────────────────────────────────────────────────
+   Auth
+   ──────────────────────────────────────────────────────────────────────── */
+
+function deriveFirstName(user) {
+  if (!user) return null;
+  if (user.displayName) {
+    const first = user.displayName.trim().split(/\s+/)[0];
+    if (first) return first;
+  }
+  if (user.email) {
+    const cleaned = user.email.split('@')[0].replace(/[._\-]+/g, ' ').replace(/\d+$/, '').trim();
+    const first = cleaned.split(/\s+/)[0];
+    if (first) return first.charAt(0).toUpperCase() + first.slice(1).toLowerCase();
+  }
+  return null;
+}
+
+async function onSignedIn(firebaseApp, user) {
+  app.user = user;
+  app.tutorName = user.displayName || '';
+  initStore(firebaseApp, user);
+
+  $('user-area').hidden = false;
+  $('user-email').textContent = user.email || '';
+
+  // Remembered from last month, so the cover page is not retyped every time.
+  try {
+    const profile = await loadProfile();
+    if (profile.name) app.tutorName = profile.name;
+  } catch (err) {
+    console.warn('Could not load profile', err);
+  }
+
+  if (!$('cmp-name').value) $('cmp-name').value = app.tutorName;
+  if (!$('dig-tutor').value) $('dig-tutor').value = app.tutorName;
+
+  refreshMonth();
+}
+
+/* ────────────────────────────────────────────────────────────────────────
    Boot
    ──────────────────────────────────────────────────────────────────────── */
+
+function fatal(html) {
+  const box = $('boot-error');
+  box.hidden = false;
+  box.innerHTML = html;
+  if (window.__onAuth) window.__onAuth({ signedIn: false });
+}
+
 function init() {
-  // Guard: make sure the CDN libraries actually loaded.
-  if (!window.PDFLib || !window.SignaturePad) {
-    const box = $('form-error');
-    box.hidden = false;
-    box.innerHTML = '<strong>Could not load required libraries.</strong>' +
-      '<p>Check your internet connection and reload the page.</p>';
+  const settings = window.TLC_SETTINGS || {};
+
+  const missing = [];
+  if (!window.PDFLib) missing.push('pdf-lib');
+  if (!window.SignaturePad) missing.push('signature_pad');
+  if (missing.length) {
+    fatal('<strong>Could not load required libraries.</strong>'
+      + `<p>Missing: ${escapeHtml(missing.join(', '))}. Check your internet connection and reload the page.</p>`);
     return;
   }
 
-  $('date-issued').value = todayISO(); // default to today, still editable
+  if (!settings.firebase || String(settings.firebase.apiKey || '').startsWith('PASTE_')) {
+    fatal('<strong>Setup isn’t finished.</strong>'
+      + '<p>The Firebase settings at the top of <code>index.html</code> are still placeholders. '
+      + 'Follow <code>FIREBASE-SETUP.md</code> to create the project and paste its config in.</p>');
+    return;
+  }
 
-  initSignaturePad();
-  initUpload();
-  initSyndicates();
-  initPreview();
+  const firebaseApp = initializeApp(settings.firebase);
+  const auth = getAuth(firebaseApp);
+  const allowedDomain = settings.ALLOWED_DOMAIN || '';
 
-  $('handin-form').addEventListener('submit', onGenerate);
-  $('download-again').addEventListener('click', () => {
-    if (lastBlobUrl) triggerDownload(lastBlobUrl, lastFilename);
+  window.__signIn = function () {
+    const err = $('auth-error');
+    if (err) err.hidden = true;
+    signInWithPopup(auth, new GoogleAuthProvider()).catch((e) => {
+      console.error(e);
+      if (!err) return;
+      err.hidden = false;
+      err.textContent = e && e.code === 'auth/unauthorized-domain'
+        ? 'This site isn’t authorised for sign-in yet. (Add its domain in Firebase → Authentication → Settings → Authorized domains.)'
+        : 'Sign-in was cancelled or failed. Please try again.';
+    });
+  };
+  window.__signOut = function () { signOut(auth).then(() => window.location.reload()); };
+
+  onAuthStateChanged(auth, (user) => {
+    if (user && allowedDomain
+        && !(user.email || '').toLowerCase().endsWith('@' + allowedDomain)) {
+      const err = $('auth-error');
+      if (err) { err.hidden = false; err.textContent = `Please sign in with your @${allowedDomain} account.`; }
+      signOut(auth);                               // re-fires this handler with null
+      if (window.__onAuth) window.__onAuth({ signedIn: false });
+      return;
+    }
+
+    const firstName = deriveFirstName(user);
+    if (firstName && window.__setWelcomeName) window.__setWelcomeName(firstName);
+
+    if (user) {
+      onSignedIn(firebaseApp, user);
+    } else {
+      app.user = null;
+      $('user-area').hidden = true;
+    }
+
+    if (window.__onAuth) window.__onAuth({ signedIn: !!user });
   });
+
+  /* ── Wiring ─────────────────────────────────────────────────────────── */
+
+  TABS.forEach((key) => $(`tab-${key}`).addEventListener('click', () => selectTab(key)));
+
+  initCapture({
+    tutorName: () => app.tutorName,
+    onSaved: (record) => {
+      app.lastSaved = record;
+      refreshMonthPicker().catch(() => {});
+    },
+  });
+
+  $('cap-share').addEventListener('click', async () => {
+    if (app.lastSaved) toast(await shareSlip(app.lastSaved, app.tutorName));
+  });
+  $('cap-copy').addEventListener('click', async () => {
+    if (app.lastSaved) toast(await copyCaption(app.lastSaved, app.tutorName));
+  });
+
+  $('month-picker').addEventListener('change', (e) => {
+    app.month = e.target.value;
+    refreshMonth();
+  });
+  $('month-list').addEventListener('click', onMonthListClick);
+  $('month-refresh').addEventListener('click', refreshMonth);
+
+  // Digital slip
+  $('dig-date').value = todayISO();
+  makePad('dig-sig-student', 'dig-sig-student-clear');
+  makePad('dig-sig-tutor', 'dig-sig-tutor-clear');
+  ['dig-date', 'dig-from', 'dig-to', 'dig-subject', 'dig-hours', 'dig-student', 'dig-tutor', 'dig-notes']
+    .forEach((id) => $(id).addEventListener('input', () => {
+      clearTimeout(init._digTimer);
+      init._digTimer = setTimeout(renderDigitalPreview, 260);
+    }));
+  $('dig-refresh').addEventListener('click', renderDigitalPreview);
+  $('dig-save').addEventListener('click', saveDigital);
+  $('dig-another').addEventListener('click', resetDigital);
+  $('dig-share').addEventListener('click', async () => {
+    if (app.lastSaved) toast(await shareSlip(app.lastSaved, app.tutorName));
+  });
+
+  // Compile
+  $('cmp-date-issued').value = todayISO();
+  makePad('cmp-signature', 'cmp-signature-clear');
+  $('cmp-month').addEventListener('change', (e) => {
+    app.month = e.target.value;
+    refreshCompile();
+  });
+  $('cmp-syndicate-count').addEventListener('input', renderSyndicateDates);
+  ['cmp-pay-month', 'cmp-date-issued'].forEach((id) =>
+    $(id).addEventListener('change', updateCoverPreview));
+  $('cmp-appendix-list').addEventListener('click', onAppendixClick);
+  $('cmp-appendix-add').addEventListener('click', () => $('cmp-appendix-file').click());
+  $('cmp-appendix-file').addEventListener('change', async (e) => {
+    const files = Array.from(e.target.files || []);
+    e.target.value = '';
+    if (!files.length) return;
+    setCompileStatus('Uploading…', 'busy');
+    try {
+      for (const file of files) {
+        const rec = await saveAppendix({ file, month: app.month, order: app.appendices.length });
+        app.appendices.push(rec);
+      }
+      renderAppendixList();
+      setCompileStatus('');
+      toast(`Added ${files.length} document${files.length === 1 ? '' : 's'}`);
+    } catch (err) {
+      console.error(err);
+      setCompileStatus(`Could not add that document. ${err.message || ''}`.trim(), 'error');
+    }
+  });
+  $('cmp-scan-file').addEventListener('change', () => {
+    const f = $('cmp-scan-file').files[0];
+    $('cmp-scan-status').textContent = f
+      ? `✓ ${f.name} — this will be used instead of your saved slips.` : '';
+  });
+  $('cmp-form').addEventListener('submit', generate);
+  $('cmp-download-again').addEventListener('click', () => {
+    if (lastPdfUrl) triggerDownload(lastPdfUrl, lastPdfName);
+  });
+
+  renderSyndicateDates();
+  selectTab('capture');
+  renderDigitalPreview();
+
+  window.addEventListener('resize', resizeAllPads);
 }
 
 if (document.readyState === 'loading') {

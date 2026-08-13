@@ -552,3 +552,238 @@ input[type="month"]::-webkit-calendar-picker-indicator { filter: invert(0.85); c
   .actions { flex-direction: column; align-items: stretch; }
   .btn-lg { width: 100%; }
 }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   CAPTURE-ERA ADDITIONS
+   Everything below arrived with in-app capture, the month view, the digital
+   slip and the appendix list. The palette, radii and shadows above are
+   unchanged — these are new components in the same house style.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+.muted   { color: var(--muted-2); }
+.btn-sm  { padding: 6px 11px; font-size: 0.78rem; }
+.btn-danger { color: var(--danger); }
+.btn-danger:hover { background: rgba(255, 107, 94, 0.12); }
+.boot-error { max-width: 720px; margin: 24px auto; }
+
+/* ── Tabs ─────────────────────────────────────────────────────────────── */
+.tabs {
+  display: flex;
+  gap: 6px;
+  max-width: 860px;
+  margin: 22px auto 4px;
+  padding: 5px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.tabs::-webkit-scrollbar { display: none; }
+.tab {
+  flex: 1 1 auto;
+  white-space: nowrap;
+  padding: 11px 14px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  font-size: 0.87rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.18s ease, color 0.18s ease;
+}
+.tab:hover { color: var(--text); background: rgba(255, 255, 255, 0.05); }
+.tab.is-active { background: var(--gold); color: #14181f; }
+.tab:focus-visible { outline: none; box-shadow: var(--focus); }
+
+/* ── Callouts ─────────────────────────────────────────────────────────── */
+.callout {
+  border: 1px solid var(--border-2);
+  border-left: 3px solid var(--gold);
+  background: rgba(212, 175, 55, 0.07);
+  border-radius: var(--radius-sm);
+  padding: 12px 14px;
+  margin: 0 0 16px;
+  font-size: 0.86rem;
+}
+.callout p { margin: 5px 0 0; color: var(--muted); }
+.callout-warn { border-left-color: #ff9f43; background: rgba(255, 159, 67, 0.09); }
+.callout-ok   { border-left-color: var(--ok); background: rgba(87, 201, 138, 0.09); }
+
+/* ── Choose / camera ──────────────────────────────────────────────────── */
+.choose-actions { display: flex; flex-wrap: wrap; gap: 12px; margin: 18px 0 10px; }
+.choose-actions .btn { flex: 1 1 220px; }
+
+.video-wrap {
+  position: relative;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  background: #000;
+  aspect-ratio: 3 / 4;
+  max-height: 62vh;
+  margin: 0 auto;
+}
+#cap-video { width: 100%; height: 100%; object-fit: cover; display: block; }
+/* A slip-shaped guide (243.84 : 423.36) to line the slip up inside. */
+.video-guide {
+  position: absolute;
+  top: 50%; left: 50%;
+  transform: translate(-50%, -50%);
+  height: 78%;
+  aspect-ratio: 243.84 / 423.36;
+  border: 2px dashed rgba(255, 255, 255, 0.7);
+  border-radius: 6px;
+  box-shadow: 0 0 0 100vmax rgba(0, 0, 0, 0.35);
+  pointer-events: none;
+}
+
+/* ── Crop editor ──────────────────────────────────────────────────────── */
+.crop-layout { display: flex; flex-wrap: wrap; gap: 18px; align-items: flex-start; }
+.crop-canvas-wrap { flex: 1 1 320px; min-width: 260px; }
+#cap-crop-canvas {
+  display: block;
+  width: 100%;
+  border-radius: var(--radius-sm);
+  background: #15161a;
+  touch-action: none;             /* dragging a corner must not scroll the page */
+  cursor: grab;
+}
+.crop-side { flex: 0 0 210px; text-align: center; }
+.crop-preview {
+  width: 100%;
+  max-width: 190px;
+  border-radius: 6px;
+  background: #fff;
+  box-shadow: var(--shadow);
+}
+.crop-tools { display: flex; gap: 8px; justify-content: center; margin-top: 12px; }
+
+/* ── Details / done ───────────────────────────────────────────────────── */
+.details-layout { display: flex; flex-wrap: wrap; gap: 20px; align-items: flex-start; }
+.details-layout .grid { flex: 1 1 320px; }
+.details-thumb {
+  width: 150px;
+  border-radius: 6px;
+  background: #fff;
+  box-shadow: var(--shadow);
+  display: block;
+}
+
+/* ── Month view ───────────────────────────────────────────────────────── */
+.month-head { display: flex; gap: 14px; align-items: flex-end; justify-content: space-between; }
+.month-head .field { margin: 0; flex: 1 1 200px; max-width: 280px; }
+.month-summary { margin: 14px 0 4px; font-size: 0.84rem; }
+
+.slip-list { display: grid; gap: 12px; margin-top: 12px; }
+.slip-card {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  padding: 12px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.slip-thumb {
+  width: 58px;
+  flex: 0 0 58px;
+  border-radius: 4px;
+  background: #fff;
+}
+.slip-body { flex: 1 1 auto; min-width: 0; }
+.slip-date { margin: 0; font-weight: 600; font-size: 0.92rem; }
+.slip-detail {
+  margin: 2px 0 0;
+  color: var(--muted-2);
+  font-size: 0.81rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.slip-actions { display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; }
+.pill {
+  display: inline-block;
+  margin-top: 5px;
+  padding: 2px 8px;
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.4px;
+  border-radius: 999px;
+  background: rgba(31, 167, 224, 0.16);
+  color: #7fd0f5;
+}
+.empty { padding: 26px 16px; text-align: center; border: 1px dashed var(--border-2); border-radius: var(--radius-sm); }
+.empty p { margin: 4px 0; }
+
+/* ── Digital slip ─────────────────────────────────────────────────────── */
+.dig-layout { display: flex; flex-wrap: wrap; gap: 22px; align-items: flex-start; }
+.dig-form { flex: 1 1 340px; min-width: 280px; }
+.dig-side { flex: 0 0 260px; text-align: center; }
+.dig-preview {
+  background: #fff;
+  border-radius: 6px;
+  box-shadow: var(--shadow);
+  overflow: hidden;
+  margin-bottom: 10px;
+}
+.dig-preview-canvas { display: block; width: 100%; height: auto; }
+
+.sig-pair { display: flex; flex-wrap: wrap; gap: 16px; margin-top: 14px; }
+.sig-block { flex: 1 1 200px; }
+.sig-block .subhead { margin-bottom: 6px; }
+.sig-wide { min-height: 150px; }
+
+/* ── Appendices ───────────────────────────────────────────────────────── */
+.apx-list { list-style: none; margin: 0 0 14px; padding: 0; display: grid; gap: 8px; }
+.apx-empty { padding: 10px 0; font-size: 0.84rem; }
+.apx-row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  padding: 9px 12px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: 0.85rem;
+}
+.apx-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.apx-size { flex: 0 0 auto; font-size: 0.76rem; }
+.apx-tools { display: flex; gap: 4px; flex: 0 0 auto; }
+
+/* ── Collapsible "I scanned it myself" ────────────────────────────────── */
+.tucked { margin-top: 14px; border-top: 1px solid var(--border); padding-top: 12px; }
+.tucked summary { cursor: pointer; font-size: 0.85rem; color: var(--muted); }
+.tucked summary:hover { color: var(--text); }
+.tucked input[type="file"] { margin-top: 8px; font-size: 0.82rem; color: var(--muted); }
+
+/* ── Toast ────────────────────────────────────────────────────────────── */
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: 26px;
+  transform: translate(-50%, 14px);
+  background: #232a36;
+  border: 1px solid var(--border-2);
+  color: var(--text);
+  padding: 12px 18px;
+  border-radius: 999px;
+  font-size: 0.85rem;
+  box-shadow: var(--shadow);
+  opacity: 0;
+  transition: opacity 0.25s ease, transform 0.25s ease;
+  z-index: 9000;
+  max-width: min(90vw, 460px);
+  text-align: center;
+}
+.toast.is-shown { opacity: 1; transform: translate(-50%, 0); }
+
+/* ── Narrow screens ───────────────────────────────────────────────────── */
+@media (max-width: 640px) {
+  .crop-side, .dig-side { flex: 1 1 100%; }
+  .crop-preview { max-width: 150px; }
+  .slip-card { flex-wrap: wrap; }
+  .slip-actions { width: 100%; justify-content: flex-start; }
+  .details-thumb { width: 110px; }
+  .tab { font-size: 0.8rem; padding: 10px 10px; }
+}

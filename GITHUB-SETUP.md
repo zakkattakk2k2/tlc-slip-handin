@@ -26,11 +26,14 @@ if you're unsure. Method B is faster if you're comfortable with git.
 5. On the next page, click the link **"uploading an existing file"**
    (under "…or upload files").
 6. Open the `TLC-Slip-Handin` folder on your Desktop. Select **everything inside it**:
-   - `index.html`, `app.js`, `styles.css`, `README.md`, `GITHUB-SETUP.md`,
-     `.nojekyll`, and the **`assets`** folder (which contains `cover-template.pdf`).
-   - Drag them all onto the GitHub upload area. (Dragging the `assets` folder keeps the
-     PDF in the right place.)
-   - You don't need to upload `Start TLC App.bat` (that's just the local launcher).
+   - `index.html`, `app.js`, `styles.css`, `firestore.rules`, `README.md`,
+     `GITHUB-SETUP.md`, `FIREBASE-SETUP.md`, `.nojekyll`
+   - the **`js`** folder (the app will not run without it)
+   - the **`assets`** folder (which contains `cover-template.pdf`)
+   - Drag them all onto the GitHub upload area. Dragging the `js` and `assets`
+     folders keeps their contents in the right place.
+   - You don't need `Start TLC App.bat` (the local launcher), the `tools` folder
+     (test scripts), or `node_modules` if it exists.
 7. Scroll down and click **Commit changes**.
 8. Now turn on the website: go to the repo's **Settings → Pages** (left sidebar).
    - **Source:** "Deploy from a branch"
@@ -69,30 +72,28 @@ You only need to connect it to the **new** GitHub repo and push.
 
 ---
 
-## ⚠️ One extra step: allow sign-in on your live site
+## ⚠️ Before the site will work: set up Firebase
 
-The app requires a **Google sign-in** (same Firebase project as the Schedule Maker,
-`schedulemaker-c212c`). Google will only show the sign-in popup on domains you've
-approved, so after your site is live you must add its address once:
+The app signs tutors in and **stores their slips**, so it needs its own Firebase
+project. That is a separate, one-time job — follow **`FIREBASE-SETUP.md`** in this
+folder from start to finish.
 
-1. Go to the **Firebase console**: https://console.firebase.google.com/
-2. Open the **schedulemaker-c212c** project.
-3. Left sidebar → **Authentication** → **Settings** tab → **Authorized domains**.
-4. Click **Add domain** and enter your GitHub Pages host **without** `https://` or any path:
+It creates a brand-new project called `tlc-slips`, which is separate from the
+Schedule Maker (`schedulemaker-c212c`) and from Sell Bios (`sell-bios`) and cannot
+affect either of them.
 
-   ```
-   <your-username>.github.io
-   ```
+Two parts of that guide matter most:
 
-5. Save. Sign-in now works on your live site (it may take a minute).
+- **Publishing `firestore.rules`.** This is what stops one tutor reading another
+  tutor's slips. Do not skip it.
+- **Authorized domains.** Add `<your-username>.github.io` under
+  **Authentication → Settings → Authorized domains**, or Google will refuse to show
+  the sign-in popup on your live site. `localhost` is already allowed, so local
+  testing works without it.
 
-**This does not affect the Schedule Maker.** Authorized domains is an *additive* list —
-you're adding a new domain, not changing the existing ones. `localhost` is already
-allowed, so local testing works without this step.
-
-> Want to limit sign-in to Genius accounts only? Open `index.html`, find
-> `const ALLOWED_DOMAIN = '';` near the Firebase block, and set it to
-> `'geniuspremium.com'`. Anyone signing in with a different account is politely turned away.
+> Sign-in is already limited to Genius accounts. To allow any Google account,
+> open `index.html`, find `ALLOWED_DOMAIN: 'geniuspremium.com'` in the SETTINGS
+> block near the top, and set it to `''`.
 
 ## Updating the app later
 
@@ -104,4 +105,4 @@ GitHub Pages redeploys automatically within a minute.
 ## If you ever swap the cover form
 
 Replace `assets/cover-template.pdf`, re-check the `COVER` coordinate map at the top of
-`app.js`, then re-upload / push.
+`js/compile.js`, then re-upload / push.

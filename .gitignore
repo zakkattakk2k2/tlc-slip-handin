@@ -7,3 +7,7 @@ Desktop.ini
 *.zip
 *.zip.txt
 _gle_form_inspect.pdf
+node_modules/
+
+# Scratch folder used when files are written from a Cowork session
+_to_delete/
