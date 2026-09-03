@@ -241,7 +241,13 @@
         <div class="choose-actions">
           <button type="button" id="cap-take" class="btn btn-primary btn-lg">📷 Take a photo</button>
           <button type="button" id="cap-choose" class="btn btn-secondary btn-lg">Choose a photo</button>
-          <input id="cap-file" class="visually-hidden" type="file" accept="image/*" capture="environment" />
+          <!-- Do NOT add a `capture` attribute here. This input is the
+               "Choose a photo" path — an existing photo from the gallery or
+               files. `capture` makes a phone launch the camera immediately and
+               skip the picker entirely, so the button silently becomes a second
+               "Take a photo". Live camera capture is "Take a photo" above,
+               which uses getUserMedia in js/capture.js. -->
+          <input id="cap-file" class="visually-hidden" type="file" accept="image/*" />
         </div>
         <p class="field-hint">One slip per photo, please — each slip is stored and counted separately.</p>
       </div>
