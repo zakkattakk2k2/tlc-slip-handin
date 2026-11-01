@@ -52,13 +52,11 @@ const MARGIN = 36;
 const GUTTER = 22;
 const CAPTION_H = 13;
 
-/** How the slips are tiled. Two per page is the default: it halves the page
-    count while keeping every slip comfortably larger than the printed one. */
-export const LAYOUTS = {
-  1: { cols: 1, rows: 1, label: 'One per page (largest)' },
-  2: { cols: 2, rows: 1, label: 'Two per page (recommended)' },
-  4: { cols: 2, rows: 2, label: 'Four per page (fewest pages)' },
-};
+/** One slip per page — a company requirement, not a preference, so it is fixed
+    here rather than offered as a choice. Two- and four-up tiling used to be
+    selectable on the Build it step; that control is gone. */
+const SLIPS_PER_PAGE = 1;
+const LAYOUT = { cols: 1, rows: 1 };
 
 /* ────────────────────────────────────────────────────────────────────────
    Cover page
@@ -113,10 +111,10 @@ async function drawCover(pdfDoc, data, StandardFonts, rgb) {
    Slip pages
    ──────────────────────────────────────────────────────────────────────── */
 
-async function drawSlipPages(pdfDoc, slips, perPage, { StandardFonts, rgb }) {
+async function drawSlipPages(pdfDoc, slips, { StandardFonts, rgb }) {
   if (!slips.length) return;
 
-  const layout = LAYOUTS[perPage] || LAYOUTS[2];
+  const layout = LAYOUT;
   const { width: PW, height: PH } = COVER.page;
   const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
 
@@ -138,9 +136,9 @@ async function drawSlipPages(pdfDoc, slips, perPage, { StandardFonts, rgb }) {
   const blockW = layout.cols * tileW + (layout.cols - 1) * GUTTER;
   const startX = (PW - blockW) / 2;
 
-  for (let i = 0; i < slips.length; i += perPage) {
+  for (let i = 0; i < slips.length; i += SLIPS_PER_PAGE) {
     const page = pdfDoc.addPage([PW, PH]);
-    const batch = slips.slice(i, i + perPage);
+    const batch = slips.slice(i, i + SLIPS_PER_PAGE);
     const rowsUsed = Math.ceil(batch.length / layout.cols);
 
     const blockH = rowsUsed * (tileH + CAPTION_H) + (rowsUsed - 1) * GUTTER;
@@ -288,11 +286,12 @@ export async function appendScannedFile(pdfDoc, file, PDFDocument) {
  *                signaturePng }
  * slips        records from the store, already in date order
  * appendices   records from the store, in the tutor's order
- * perPage      1 | 2 | 4
  * scannedFile  optional File, used instead of stored slips
+ *
+ * Slips always print one per page — see SLIPS_PER_PAGE.
  */
 export async function buildHandInPdf({
-  cover, slips = [], appendices = [], perPage = 2, scannedFile = null, onProgress = null,
+  cover, slips = [], appendices = [], scannedFile = null, onProgress = null,
 }) {
   const { PDFDocument, StandardFonts, rgb } = window.PDFLib;
 
@@ -307,7 +306,7 @@ export async function buildHandInPdf({
     await appendScannedFile(pdfDoc, scannedFile, PDFDocument);
   } else if (slips.length) {
     if (onProgress) onProgress(`Adding ${slips.length} slip${slips.length === 1 ? '' : 's'}…`);
-    await drawSlipPages(pdfDoc, slips, perPage, { StandardFonts, rgb });
+    await drawSlipPages(pdfDoc, slips, { StandardFonts, rgb });
   }
 
   if (appendices.length) {

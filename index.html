@@ -540,14 +540,9 @@
 
         <fieldset class="card">
           <legend><span class="step">5</span> Build it</legend>
-          <div class="field">
-            <label for="cmp-per-page">Slips per page</label>
-            <select id="cmp-per-page">
-              <option value="1">One per page (largest)</option>
-              <option value="2" selected>Two per page (recommended)</option>
-              <option value="4">Four per page (fewest pages)</option>
-            </select>
-          </div>
+          <!-- Slips print one per page by design (company requirement), so
+               there is no layout choice here. See SLIPS_PER_PAGE in
+               js/compile.js. -->
           <div class="actions">
             <button type="submit" id="cmp-generate" class="btn btn-primary btn-lg">Generate &amp; download</button>
             <button type="button" id="cmp-download-again" class="btn btn-secondary" hidden>Download again</button>

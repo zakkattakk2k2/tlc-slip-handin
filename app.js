@@ -574,7 +574,6 @@ async function generate(e) {
       cover,
       slips: cover.scanned ? [] : app.slips,
       appendices: app.appendices,
-      perPage: parseInt($('cmp-per-page').value, 10) || 2,
       scannedFile: cover.scanned,
       onProgress: (m) => setCompileStatus(m, 'busy'),
     });
